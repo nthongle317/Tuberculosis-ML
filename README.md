@@ -7,5 +7,4 @@ Tuberculosis-ML is a git repository providing processing codes related to develo
 3. Please cite the following: @@@
 
 # **Note**  
---
 For Figure 2D revisualizing or DMR calling reconstructing, please download preprocessed and normalized data from (1).
