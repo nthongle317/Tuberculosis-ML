@@ -1,46 +1,66 @@
+library(ggplot2)
 library(data.table)
-library(dplyr)
-library(stats)
-library(ggpubr)
-library(caret)
-library(precrec)
-library(readxl)
-library(EnvStats)
-library(gghalves)
-library(ggdist)
-library(reshape2)
+library(annotatr)
+library(GenomicRanges)
+library(minfi)
+library(stringr)
+library(writexl)
+library(RColorBrewer)
 
+set.seed(123)
+
+### Setup directory
+# setwd(dirname(rstudioapi::getSourceEditorContext()$path))
 directory = "/path/to/data"
 
-input_dir=paste0(directory, "/data/dataInput.old")
-output_dir=paste0(directory, "/fig/Fig2/data/B")
+input_dir=paste0(directory, "/data/dataInput")
+output_dir=paste0(directory, "/fig/Fig1/data/B")
 
-dt=as.data.frame(fread(paste0(input_dir, "/bigTable.mergedAll.tsv")))
-row.names(dt)=dt$probeID
+### Get DMPs
+cpgList=read.table(paste0(directory, "/data/train/DMP.current/TB-HC/DMPs.hg38.tsv"), sep="\t", header=T)
 
-set1 <- read.table(paste0("/media/thong/sda/RCID/CoHoai/Tuberculosis/data/train/DMP/TB-HC/BMA.txt"), header=T)$probe_ID[-1]
-set2 <- read.table(paste0("/media/thong/sda/RCID/CoHoai/Tuberculosis/data/train/DMP/TB-HC/RF_min.txt"), header=T)$name
-set3 <- read.table(paste0("/media/thong/sda/RCID/CoHoai/Tuberculosis/data/train/DMP/TB-HC/PLS_min.txt"), header=T)$name
-set4 <- read.table(paste0("/media/thong/sda/RCID/CoHoai/Tuberculosis/data/train/DMP/TB-HC/LASSO.txt"), header=T)$probeID
+DMP.all.GR=makeGRangesFromDataFrame(cpgList, keep.extra.columns=TRUE)
+genome(DMP.all.GR)="hg38"
 
-SigCpG=union(union(union(set1, set2), set3), set4)
+### Annotation
+annots=c("hg38_genes_promoters", "hg38_genes_3UTRs", "hg38_genes_5UTRs", "hg38_genes_exons", "hg38_genes_introns", "hg38_genes_intergenic", "hg38_genes_intronexonboundaries", "hg38_genes_exonintronboundaries", "hg38_enhancers_fantom", "hg38_cpg_shores", "hg38_cpg_islands", "hg38_cpg_shelves", "hg38_cpg_inter", "hg38_cpgs")
+annotations = build_annotations(genome = 'hg38', annotations = annots)
+DMP.all.anno = annotate_regions(
+  regions = DMP.all.GR,
+  annotations = annotations,
+  ignore.strand = FALSE,
+  quiet = FALSE)
 
-Sample=read.table(paste0(directory, "/config/design_train_data.tsv"),sep="\t", header=T)
-names(Sample)=c("Accession", "Class")
+DMP.all.anno.df1 <- data.frame(DMP.all.anno)
+dim(DMP.all.anno.df1)
+table(DMP.all.anno.df1$annot.type)
 
-df=dt[dt$probeID%in%SigCpG, Sample$Accession]
-tdf=data.frame(t(df))
-tdf$sample_ID=rownames(tdf)
-tdf$Class=merge(tdf, Sample, by.x="sample_ID", by.y="Accession")$Class
-trainDT=arrange(tdf, desc(Class))
-trainDT=trainDT[,-grep("sample_ID", names(trainDT))]
+DMP.all.anno.df <-  DMP.all.anno.df1[!duplicated(DMP.all.anno.df1[,c("probeID", "annot.type")]),]
+dim(DMP.all.anno.df)
+table(DMP.all.anno.df$annot.type)
 
-train_plot=melt(trainDT)
+### Split into relative CpG Island or Genes
+## Relative CpG Island
+DMP.cpg <- DMP.all.anno.df[grepl("hg38_cpg_", DMP.all.anno.df$annot.type),]
+DMP.cpg$cpg.type <- "Non CpG islands"
+DMP.cpg["cpg.type"][DMP.cpg["annot.type"] == "hg38_cpg_inter"] <- "Open sea"
+DMP.cpg["cpg.type"][DMP.cpg["annot.type"] == "hg38_cpg_shores"] <- "CpG shores"
+DMP.cpg["cpg.type"][DMP.cpg["annot.type"] == "hg38_cpg_islands"] <- "CpG islands"
+DMP.cpg["cpg.type"][DMP.cpg["annot.type"] == "hg38_cpg_shelves"] <- "CpG shelves"
+table(DMP.cpg$cpg.type)
+fwrite(DMP.cpg, paste0(output_dir,"/annotation_cpgsites.tsv"), sep = "\t", col.names = T, row.names = F, quote = F)
 
-write.table(train_plot, paste0(output_dir, "/boxplotData.tsv"), quote=F, row.names=F, sep="\t")
-
-### prepare limma p-value
-dt=as.data.frame(fread(paste0(directory, "/data/train/DMP.current/TB-HC/DMPs.hg38.tsv")))
-dt=dt[dt$probeID%in%SigCpG,c("probeID", "ind.fdr")]
-write.table(dt, paste0(output_dir, "/Limma_indFDR.tsv"), quote=F, row.names=F, sep="\t")
-
+## Genes
+DMP.gene <- DMP.all.anno.df[!grepl("hg38_cpg_", DMP.all.anno.df$annot.type),]
+DMP.gene$gene.type <- "Gene body"
+DMP.gene["gene.type"][DMP.gene["annot.type"] == "hg38_genes_introns"] <- "Introns"
+DMP.gene["gene.type"][DMP.gene["annot.type"] == "hg38_genes_intronexonboundaries"] <- "Intronic boundary"
+DMP.gene["gene.type"][DMP.gene["annot.type"] == "hg38_genes_exonintronboundaries"] <- "Exonic boundary"
+DMP.gene["gene.type"][DMP.gene["annot.type"] == "hg38_genes_intergenic"] <- "Intergenic"
+DMP.gene["gene.type"][DMP.gene["annot.type"] == "hg38_genes_exons"] <- "Exons"
+DMP.gene["gene.type"][DMP.gene["annot.type"] == "hg38_enhancers_fantom"] <- "Enhancer (Fantom)"
+DMP.gene["gene.type"][DMP.gene["annot.type"] == "hg38_genes_5UTRs"] <- "5UTR"
+DMP.gene["gene.type"][DMP.gene["annot.type"] == "hg38_genes_promoters"] <- "Promoters"
+DMP.gene["gene.type"][DMP.gene["annot.type"] == "hg38_genes_3UTRs"] <- "3UTR"
+table(DMP.gene$gene.type)
+fwrite(DMP.gene, paste0(output_dir,"/annotation_genes.tsv"), sep = "\t", col.names = T, row.names = F, quote = F)
